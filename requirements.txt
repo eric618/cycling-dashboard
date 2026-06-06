@@ -7,3 +7,4 @@ pandas
 polyline
 python-dotenv
 fitparse
+supabase

@@ -17,9 +17,8 @@ def _secret(key: str, default: str = "") -> str:
 GARMIN_EMAIL    = _secret("GARMIN_EMAIL")
 GARMIN_PASSWORD = _secret("GARMIN_PASSWORD")
 
-# En Streamlit Cloud el filesystem es efímero — usamos /tmp para la DB
-_is_cloud = os.getenv("HOME", "").startswith("/home") or os.path.exists("/mount/src")
-DB_PATH = "/tmp/cycling.db" if _is_cloud else os.path.join(os.path.dirname(__file__), "cycling.db")
+SUPABASE_URL = _secret("SUPABASE_URL")
+SUPABASE_KEY = _secret("SUPABASE_KEY")
 
 DEFAULT_FTP          = int(_secret("FTP_WATTS", "250"))
 DEFAULT_HR_THRESHOLD = int(_secret("HR_THRESHOLD", "170"))
