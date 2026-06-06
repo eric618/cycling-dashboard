@@ -10,12 +10,24 @@ from supabase import create_client, Client
 
 @lru_cache(maxsize=1)
 def _client() -> Client:
-    if not SUPABASE_URL or not SUPABASE_KEY:
+    url = key = ""
+    # Try Streamlit secrets first (cloud), then env vars (local)
+    try:
+        import streamlit as st
+        url = st.secrets.get("SUPABASE_URL", "")
+        key = st.secrets.get("SUPABASE_KEY", "")
+    except Exception:
+        pass
+    if not url or not key:
+        import os
+        url = os.getenv("SUPABASE_URL", "")
+        key = os.getenv("SUPABASE_KEY", "")
+    if not url or not key:
         raise RuntimeError(
             "Faltan SUPABASE_URL y SUPABASE_KEY. "
             "Agrégalas al .env o a los Secrets de Streamlit Cloud."
         )
-    return create_client(SUPABASE_URL, SUPABASE_KEY)
+    return create_client(url, key)
 
 
 def init_db():
