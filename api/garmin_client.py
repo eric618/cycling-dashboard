@@ -34,14 +34,14 @@ def get_all_activities(client: Garmin, max_activities: int = 500) -> list[dict]:
 
 
 def get_activity_details(client: Garmin, activity_id: int) -> dict:
-    """Fetch detailed data for a single activity (includes splits, HR, power)."""
-    return client.get_activity(activity_id)
+    """Fetch detailed data for a single activity (includes splits, HR, power streams)."""
+    return client.get_activity_details(activity_id)
 
 
 def get_activity_hr_zones(client: Garmin, activity_id: int) -> list:
     """Fetch heart rate zones for an activity."""
     try:
-        return client.get_activity_hr_timeinzones(activity_id)
+        return client.get_activity_hr_in_timezones(activity_id)
     except Exception:
         return []
 
