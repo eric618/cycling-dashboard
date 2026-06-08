@@ -8,3 +8,9 @@ font = "sans serif"
 [server]
 headless = true
 enableCORS = false
+
+[client]
+# Oculta la navegación automática que Streamlit genera a partir de la carpeta
+# pages/ — usamos nuestra propia navegación (radio en español) en app.py,
+# y sin esto aparecían dos menús duplicados (uno en inglés, otro en español).
+showSidebarNavigation = false
