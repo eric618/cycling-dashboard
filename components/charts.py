@@ -228,6 +228,38 @@ def decoupling_trend_chart(dates: list, values: list) -> go.Figure:
     return fig
 
 
+def efficiency_trend_chart(dates: list, values: list) -> go.Figure:
+    """
+    Tendencia de eficiencia aeróbica (Watts por pulsación) por actividad.
+    Una línea ascendente indica mejora de la base aeróbica: misma frecuencia
+    cardíaca produce más potencia con el paso del tiempo.
+    """
+    if not dates:
+        return go.Figure()
+    fig = go.Figure(go.Scatter(
+        x=dates, y=values,
+        mode="lines+markers",
+        line=dict(color="#4CAF50", width=2),
+        marker=dict(size=6),
+        hovertemplate="%{x}<br>%{y:.2f} W/lpm<extra></extra>",
+    ))
+    # Línea de tendencia simple (media móvil) para resaltar la dirección
+    if len(values) >= 5:
+        s = pd.Series(values).rolling(5, min_periods=1).mean()
+        fig.add_trace(go.Scatter(
+            x=dates, y=s, mode="lines", name="Tendencia (media móvil 5)",
+            line=dict(color="#4CAF50", width=2.5, dash="dot"),
+            opacity=0.6,
+        ))
+    fig.update_layout(
+        title="Eficiencia aeróbica — Watts por pulsación (mayor es mejor)",
+        xaxis_title=None, yaxis_title="W / lpm",
+        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+        margin=dict(t=40, b=20), showlegend=False,
+    )
+    return fig
+
+
 def zone_trend_stacked_bar(dates: list, zone_data: list[dict], title: str) -> go.Figure:
     """
     Stacked bar of zone-time distribution over periods (weeks/months).

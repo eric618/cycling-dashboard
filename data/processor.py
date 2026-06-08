@@ -254,3 +254,236 @@ def detect_intervals(watts_stream: list[float], ftp: float,
             })
 
     return intervals
+
+
+# ---------------------------------------------------------------------------
+# Fase 6 — "panel de decisiones": traducir métricas derivadas a algo accionable
+# ---------------------------------------------------------------------------
+
+HEURISTIC_DISCLAIMER = (
+    "⚠️ Esto es una heurística orientativa basada en TSS/CTL/ATL/TSB — no "
+    "sustituye el criterio de un entrenador ni considera factores externos "
+    "como sueño, nutrición, estrés o enfermedad. Úsalo como una sugerencia "
+    "de partida, no como una prescripción."
+)
+
+
+def fitness_fatigue_form_labels(ctl: float, atl: float, tsb: float) -> dict:
+    """
+    Traduce CTL/ATL/TSB (cifras abstractas) a etiquetas simples en lenguaje
+    natural — "Fitness", "Fatiga" y "Forma" — para que el usuario no tenga
+    que interpretar números derivados por sí mismo.
+    """
+    # Fitness: nivel de CTL (umbral orientativo para ciclistas recreativo-amateur)
+    if ctl >= 70:
+        fitness = "Alta"
+    elif ctl >= 40:
+        fitness = "Media"
+    else:
+        fitness = "Base / en construcción"
+
+    # Fatiga: relación ATL vs CTL — ATL muy por encima de CTL = carga aguda alta
+    if atl > ctl * 1.3:
+        fatigue = "Alta"
+    elif atl > ctl * 1.05:
+        fatigue = "Moderada"
+    else:
+        fatigue = "Baja"
+
+    # Forma: TSB (= CTL - ATL)
+    if tsb < -20:
+        form = "Comprometida (mucha fatiga acumulada)"
+    elif tsb < -10:
+        form = "Cargada (entrenando duro)"
+    elif tsb <= 5:
+        form = "Equilibrada"
+    else:
+        form = "Fresca"
+
+    return {"fitness": fitness, "fatigue": fatigue, "form": form,
+            "ctl": round(ctl, 1), "atl": round(atl, 1), "tsb": round(tsb, 1)}
+
+
+def recommend_next_session(ctl: float, atl: float, tsb: float,
+                            recent_hours: float = None,
+                            recent_tss: float = None) -> dict:
+    """
+    Heurística simple de reglas que traduce el estado de forma actual en una
+    sugerencia accionable para la próxima sesión. No es una prescripción
+    médica/deportiva — ver HEURISTIC_DISCLAIMER.
+
+    Devuelve {label, detail, color} listo para renderizar como tarjeta.
+    """
+    # Reglas ordenadas de "más cauteloso" a "más agresivo"
+    if tsb < -20 or (recent_hours is not None and recent_hours > 12 and tsb < -10):
+        return {
+            "label": "Descanso o Z2 muy suave",
+            "detail": ("Tu fatiga acumulada (TSB muy negativo) sugiere que tu cuerpo "
+                       "necesita recuperarse. Lo ideal: día libre o, como mucho, "
+                       "60-90 min en Z1-Z2 sin intensidad."),
+            "color": "#F44336",
+        }
+    if tsb < -10:
+        return {
+            "label": "Z2 moderado, sin intensidad",
+            "detail": ("Estás en una fase de carga — tu forma está algo comprometida. "
+                       "Prioriza resistencia aeróbica (Z2) y evita series de alta "
+                       "intensidad hoy; dale a tu cuerpo un día para asimilar."),
+            "color": "#FF9800",
+        }
+    if tsb <= 5:
+        return {
+            "label": "Buen momento para series de calidad",
+            "detail": ("Tu forma está equilibrada — fitness y fatiga en balance. "
+                       "Es un buen día para meter intervalos de calidad (umbral, "
+                       "VO2max) si tu plan lo contempla."),
+            "color": "#4CAF50",
+        }
+    # tsb > 5 — fresco
+    if recent_hours is not None and recent_hours < 5:
+        return {
+            "label": "Estás fresco — aprovecha para sumar volumen o calidad",
+            "detail": ("Tu carga reciente ha sido baja y tu forma está fresca. "
+                       "Es un buen momento para una salida larga de base o para "
+                       "un entrenamiento de alta intensidad — según lo que tu "
+                       "plan necesite más ahora mismo."),
+            "color": "#2196F3",
+        }
+    return {
+        "label": "Estás fresco — buen momento para un entreno de calidad",
+        "detail": ("Tu forma está en positivo (TSB alto). Aprovecha para un "
+                   "entrenamiento exigente: series, umbral o un objetivo "
+                   "específico de tu calendario."),
+        "color": "#2196F3",
+    }
+
+
+def aerobic_efficiency(watts_stream: list[float], hr_stream: list[float]) -> Optional[float]:
+    """
+    Eficiencia aeróbica: ratio potencia/FC promedio de una actividad
+    (Watts por pulsación). Subir en el tiempo = misma FC produce más potencia,
+    es decir, mejora de la base aeróbica. Es la contraparte "positiva" del
+    decoupling: una sola cifra por actividad, comparable en una serie temporal.
+    """
+    n = min(len(watts_stream), len(hr_stream))
+    if n < 300:  # al menos ~5 minutos de datos simultáneos
+        return None
+
+    avg_w = sum(watts_stream[:n]) / n
+    avg_h = sum(hr_stream[:n]) / n
+    if avg_h == 0:
+        return None
+
+    return round(avg_w / avg_h, 2)
+
+
+def detect_milestones(activities: list[dict], computed_by_id: dict,
+                       power_curve_history: dict = None,
+                       lookback_days: int = 30) -> list[dict]:
+    """
+    Compara el periodo reciente (últimos `lookback_days` días) contra el
+    histórico para detectar hitos dignos de destacar. No requiere ML — son
+    comparaciones directas de máximos/promedios.
+
+    `activities`: lista de actividades (con start_date, moving_time_s, etc.)
+    `computed_by_id`: {activity_id: {ftp_estimate, np_watts, tss, ...}}
+    `power_curve_history`: opcional, {duration_s: best_watts} ya calculado
+
+    Devuelve una lista de {title, detail, icon} para mostrar como tarjetas/badges.
+    """
+    import datetime as _dt
+
+    if not activities:
+        return []
+
+    milestones = []
+
+    try:
+        now = _dt.datetime.now()
+        cutoff = now - _dt.timedelta(days=lookback_days)
+
+        def _parse_date(a):
+            try:
+                return _dt.datetime.strptime((a.get("start_date") or "")[:10], "%Y-%m-%d")
+            except Exception:
+                return None
+
+        recent = [a for a in activities if (d := _parse_date(a)) and d >= cutoff]
+        older = [a for a in activities if (d := _parse_date(a)) and d < cutoff]
+
+        # 1. FTP estimado: ¿el mejor reciente supera al mejor histórico previo?
+        recent_ftp = max((computed_by_id.get(a["id"], {}).get("ftp_estimate") or 0 for a in recent), default=0)
+        older_ftp = max((computed_by_id.get(a["id"], {}).get("ftp_estimate") or 0 for a in older), default=0)
+        if recent_ftp and older_ftp and recent_ftp > older_ftp:
+            pct = (recent_ftp - older_ftp) / older_ftp * 100
+            if pct >= 1.5:
+                milestones.append({
+                    "title": f"Nuevo mejor FTP estimado: {recent_ftp:.0f} W",
+                    "detail": f"+{pct:.0f}% respecto a tu mejor estimación anterior ({older_ftp:.0f} W).",
+                    "icon": "⚡",
+                })
+        elif recent_ftp and not older_ftp:
+            milestones.append({
+                "title": f"FTP estimado: {recent_ftp:.0f} W",
+                "detail": "Primera estimación de FTP registrada en tu histórico reciente.",
+                "icon": "⚡",
+            })
+
+        # 2. Mejor potencia normalizada (NP) reciente vs histórica
+        recent_np = max((computed_by_id.get(a["id"], {}).get("np_watts") or 0 for a in recent), default=0)
+        older_np = max((computed_by_id.get(a["id"], {}).get("np_watts") or 0 for a in older), default=0)
+        if recent_np and older_np and recent_np > older_np:
+            milestones.append({
+                "title": f"Mejor potencia normalizada: {recent_np:.0f} W",
+                "detail": f"Superaste tu anterior mejor NP de {older_np:.0f} W en los últimos {lookback_days} días.",
+                "icon": "🔥",
+            })
+
+        # 3. Récord de volumen semanal (horas) reciente
+        def _week_key(a):
+            d = _parse_date(a)
+            return d.isocalendar()[:2] if d else None
+
+        weekly_hours: dict = {}
+        for a in activities:
+            wk = _week_key(a)
+            if wk:
+                weekly_hours[wk] = weekly_hours.get(wk, 0) + (a.get("moving_time_s") or 0) / 3600
+
+        if weekly_hours:
+            sorted_weeks = sorted(weekly_hours.items())
+            best_week, best_hours = max(sorted_weeks, key=lambda x: x[1])
+            # ¿el récord cae dentro del periodo reciente?
+            recent_weeks = {wk for a in recent if (wk := _week_key(a))}
+            if best_week in recent_weeks and len(sorted_weeks) > 1:
+                second_best = max((h for wk, h in sorted_weeks if wk != best_week), default=0)
+                if best_hours > second_best:
+                    milestones.append({
+                        "title": f"Récord de volumen semanal: {best_hours:.1f} h",
+                        "detail": f"Tu semana más larga hasta ahora — superando las {second_best:.1f} h previas.",
+                        "icon": "📈",
+                    })
+
+        # 4. Curva de potencia: ¿algún PR reciente en duraciones clave?
+        if power_curve_history:
+            for dur in (300, 1200, 3600):  # 5min, 20min, 1h
+                best = power_curve_history.get(dur)
+                if not best:
+                    continue
+                # ¿el PR proviene de una actividad reciente?
+                for a in recent:
+                    w = computed_by_id.get(a["id"], {})
+                    # Heurística simple: si el NP de la actividad reciente es muy
+                    # cercano al mejor histórico de esa duración, lo consideramos candidato
+                    if w.get("np_watts") and abs(w["np_watts"] - best) / best < 0.03:
+                        milestones.append({
+                            "title": f"Posible nuevo mejor esfuerzo de {POWER_CURVE_LABELS.get(dur, f'{dur}s')}: {best:.0f} W",
+                            "detail": f"Detectado en una actividad de los últimos {lookback_days} días.",
+                            "icon": "🏆",
+                        })
+                        break
+    except Exception:
+        # Detección de hitos es "nice to have" — nunca debe romper la página
+        return milestones
+
+    return milestones

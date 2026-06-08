@@ -1,11 +1,12 @@
 import streamlit as st
 from data.cache import get_activities_cached, get_stream
 from data.processor import (
-    power_curve, decoupling, detect_intervals, power_zones,
+    power_curve, decoupling, detect_intervals, power_zones, aerobic_efficiency,
     POWER_CURVE_DURATIONS,
 )
 from components.charts import (
     power_curve_chart, decoupling_trend_chart, zone_trend_stacked_bar,
+    efficiency_trend_chart,
 )
 import pandas as pd
 
@@ -86,6 +87,44 @@ def render(athlete: dict, ftp: int, hr_threshold: int):
                    f"({'buena estabilidad aeróbica' if avg_decoupling < 5 else 'posible margen de mejora en resistencia aeróbica'})")
     else:
         st.info("Necesitas actividades con potencia y FC simultáneas (>10 min) para ver esta métrica.")
+
+    st.divider()
+
+    # --- 2.5 Aerobic efficiency (Watts per heartbeat) ---
+    st.subheader("Eficiencia aeróbica (W por pulsación)")
+    st.caption(
+        "Compara cuánta potencia produces por cada latido del corazón, actividad a actividad. "
+        "Una tendencia ascendente es una de las señales más claras de que tu base aeróbica está mejorando — "
+        "más relevante que acumular kilómetros sin más."
+    )
+    eff_rows = []
+    for a in recent:
+        aid = a["id"]
+        w = watts_streams.get(aid)
+        h = hr_streams.get(aid)
+        if not w or not h:
+            continue
+        eff = aerobic_efficiency(w, h)
+        if eff is not None:
+            eff_rows.append((a["start_date"][:10], eff))
+    if eff_rows:
+        eff_rows.sort()
+        eff_dates, eff_values = zip(*eff_rows)
+        st.plotly_chart(efficiency_trend_chart(list(eff_dates), list(eff_values)), use_container_width=True)
+        if len(eff_values) >= 6:
+            recent_avg = sum(eff_values[-5:]) / 5
+            older_avg = sum(eff_values[:5]) / 5
+            delta_pct = (recent_avg - older_avg) / older_avg * 100 if older_avg else 0
+            if delta_pct > 2:
+                st.caption(f"📈 Tu eficiencia aeróbica ha mejorado ~**{delta_pct:.0f}%** "
+                           f"comparando tus últimas 5 salidas con las primeras 5 de esta muestra.")
+            elif delta_pct < -2:
+                st.caption(f"📉 Tu eficiencia aeróbica bajó ~**{abs(delta_pct):.0f}%** en el mismo periodo — "
+                           f"puede deberse a fatiga acumulada, calor, o simplemente variabilidad normal.")
+            else:
+                st.caption("Tu eficiencia aeróbica se mantiene relativamente estable en este periodo.")
+    else:
+        st.info("Necesitas actividades con potencia y FC simultáneas (>5 min) para ver esta métrica.")
 
     st.divider()
 
