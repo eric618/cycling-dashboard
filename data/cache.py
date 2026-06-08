@@ -82,6 +82,24 @@ def get_activities(athlete_id=None, limit=None):
     return q.execute().data or []
 
 
+def get_activities_cached(athlete_id=None, limit=None):
+    """
+    Streamlit-cached wrapper around get_activities (ttl=300s).
+    Falls back to the uncached version outside a Streamlit runtime
+    (e.g. sync.py) so this module stays importable everywhere.
+    """
+    try:
+        import streamlit as st
+
+        @st.cache_data(ttl=300, show_spinner=False)
+        def _cached(athlete_id, limit):
+            return get_activities(athlete_id=athlete_id, limit=limit)
+
+        return _cached(athlete_id, limit)
+    except Exception:
+        return get_activities(athlete_id=athlete_id, limit=limit)
+
+
 def get_activity(activity_id):
     res = _client().table("activities").select("*").eq("id", str(activity_id)).execute()
     return res.data[0] if res.data else None
@@ -119,6 +137,27 @@ def save_computed(activity_id, np_watts=None, tss=None, if_value=None, ftp_estim
 def get_computed(activity_id):
     res = _client().table("computed_metrics").select("*").eq("activity_id", str(activity_id)).execute()
     return res.data[0] if res.data else None
+
+
+def get_computed_batch(activity_ids: list) -> dict:
+    """Fetch computed_metrics for many activities in a single query.
+    Returns {activity_id: row}."""
+    ids = [str(i) for i in activity_ids]
+    if not ids:
+        return {}
+    res = _client().table("computed_metrics").select("*").in_("activity_id", ids).execute()
+    return {row["activity_id"]: row for row in (res.data or [])}
+
+
+def get_streams_batch(activity_ids: list, stream_type: str) -> dict:
+    """Fetch one stream type for many activities in a single query.
+    Returns {activity_id: data_list}."""
+    ids = [str(i) for i in activity_ids]
+    if not ids:
+        return {}
+    res = _client().table("streams").select("activity_id,data_json") \
+        .eq("stream_type", stream_type).in_("activity_id", ids).execute()
+    return {row["activity_id"]: json.loads(row["data_json"]) for row in (res.data or [])}
 
 
 # --- HR Zones ---

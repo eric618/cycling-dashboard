@@ -4,7 +4,7 @@ import pandas as pd
 from typing import Optional
 
 
-STRAVA_ORANGE = "#FC4C02"
+ACCENT_COLOR = "#FC4C02"
 PALETTE = px.colors.qualitative.Set2
 
 
@@ -24,7 +24,7 @@ def weekly_distance_bar(activities: list[dict]) -> go.Figure:
 
     fig = go.Figure(go.Bar(
         x=weekly["week"], y=weekly["km"],
-        marker_color=STRAVA_ORANGE,
+        marker_color=ACCENT_COLOR,
         hovertemplate="%{x|%d %b}<br>%{y:.1f} km<extra></extra>",
     ))
     fig.update_layout(
@@ -46,7 +46,7 @@ def monthly_distance_bar(activities: list[dict]) -> go.Figure:
 
     fig = go.Figure(go.Bar(
         x=monthly["month"], y=monthly["km"],
-        marker_color=STRAVA_ORANGE,
+        marker_color=ACCENT_COLOR,
         hovertemplate="%{x|%b %Y}<br>%{y:.1f} km<extra></extra>",
     ))
     fig.update_layout(
@@ -80,7 +80,7 @@ def zone_donut(zone_seconds: dict, title: str) -> go.Figure:
 
 
 def stream_line(time_s: list, values: list, title: str, y_label: str,
-                rolling: int = None, color: str = STRAVA_ORANGE) -> go.Figure:
+                rolling: int = None, color: str = ACCENT_COLOR) -> go.Figure:
     minutes = [t / 60 for t in time_s]
     fig = go.Figure()
 
@@ -140,7 +140,7 @@ def ftp_trend_line(activities: list[dict]) -> go.Figure:
     fig = go.Figure(go.Scatter(
         x=dates, y=ftps,
         mode="lines+markers",
-        line=dict(color=STRAVA_ORANGE, width=2),
+        line=dict(color=ACCENT_COLOR, width=2),
         marker=dict(size=6),
         hovertemplate="%{x}<br>FTP est: %{y:.0f}W<extra></extra>",
     ))
@@ -171,6 +171,85 @@ def ctl_atl_chart(dates: list, ctl: list, atl: list) -> go.Figure:
         title="CTL / ATL / TSB", xaxis_title=None, yaxis_title="Puntos de entrenamiento",
         plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
         margin=dict(t=40, b=20),
+    )
+    return fig
+
+
+def power_curve_chart(curve: dict) -> go.Figure:
+    """
+    `curve`: {duration_s: best_watts}. Renders log-scale x-axis power curve.
+    """
+    from data.processor import POWER_CURVE_LABELS
+    items = [(d, w) for d, w in curve.items() if w is not None]
+    if not items:
+        return go.Figure()
+    items.sort()
+    durations, watts = zip(*items)
+    labels = [POWER_CURVE_LABELS.get(d, f"{d}s") for d in durations]
+
+    fig = go.Figure(go.Scatter(
+        x=durations, y=watts,
+        mode="lines+markers",
+        line=dict(color=ACCENT_COLOR, width=2.5),
+        marker=dict(size=8),
+        text=labels,
+        hovertemplate="%{text}<br>%{y:.0f} W<extra></extra>",
+    ))
+    fig.update_layout(
+        title="Curva de potencia (mejor histórico)",
+        xaxis=dict(title="Duración", type="log",
+                   tickvals=list(durations), ticktext=labels),
+        yaxis_title="Watts",
+        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+        margin=dict(t=40, b=20),
+    )
+    return fig
+
+
+def decoupling_trend_chart(dates: list, values: list) -> go.Figure:
+    """Line chart of Pw:HR decoupling (%) per activity over time."""
+    if not dates:
+        return go.Figure()
+    fig = go.Figure(go.Scatter(
+        x=dates, y=values,
+        mode="lines+markers",
+        line=dict(color="#E91E63", width=2),
+        marker=dict(size=6),
+        hovertemplate="%{x}<br>Decoupling: %{y:.1f}%<extra></extra>",
+    ))
+    fig.add_hline(y=5, line=dict(color="gray", width=1, dash="dot"),
+                  annotation_text="Umbral de referencia 5%")
+    fig.update_layout(
+        title="Decoupling Pw:HR por actividad (menor es mejor)",
+        xaxis_title=None, yaxis_title="Decoupling (%)",
+        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+        margin=dict(t=40, b=20),
+    )
+    return fig
+
+
+def zone_trend_stacked_bar(dates: list, zone_data: list[dict], title: str) -> go.Figure:
+    """
+    Stacked bar of zone-time distribution over periods (weeks/months).
+    `zone_data`: list of {zone_name: seconds} aligned with `dates`.
+    """
+    if not dates or not zone_data:
+        return go.Figure()
+    zone_names = list(zone_data[0].keys())
+    fig = go.Figure()
+    for i, zname in enumerate(zone_names):
+        fig.add_trace(go.Bar(
+            x=dates, y=[zd.get(zname, 0) / 60 for zd in zone_data],
+            name=zname,
+            marker_color=PALETTE[i % len(PALETTE)],
+            hovertemplate="%{x}<br>" + zname + ": %{y:.0f} min<extra></extra>",
+        ))
+    fig.update_layout(
+        title=title, barmode="stack",
+        xaxis_title=None, yaxis_title="Minutos",
+        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+        margin=dict(t=40, b=20),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02),
     )
     return fig
 

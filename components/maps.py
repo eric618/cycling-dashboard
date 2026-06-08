@@ -30,8 +30,22 @@ def activity_map(latlng: list = None, polyline_enc: str = None,
 
 
 def multi_activity_map(activities: list[dict], height: int = 500) -> folium.Map:
-    """All activities on a single map, color-coded by TSS."""
-    m = folium.Map(location=[40.4168, -3.7038], zoom_start=10, tiles="CartoDB positron")
+    """All activities on a single map, color-coded by TSS.
+    Centered dynamically on the bounding box of the activities' routes
+    (no hardcoded default location)."""
+    # Pre-compute bounds so the map opens centered on the user's own routes
+    all_coords = []
+    for act in activities:
+        all_coords.extend(decode_polyline(act.get("map_polyline") or ""))
+
+    if all_coords:
+        lats = [c[0] for c in all_coords]
+        lons = [c[1] for c in all_coords]
+        center = [(min(lats) + max(lats)) / 2, (min(lons) + max(lons)) / 2]
+    else:
+        center = all_coords[0] if all_coords else [0, 0]
+
+    m = folium.Map(location=center, zoom_start=11, tiles="CartoDB positron")
 
     max_tss = max((a.get("tss") or 0 for a in activities), default=1) or 1
 
@@ -62,14 +76,9 @@ def multi_activity_map(activities: list[dict], height: int = 500) -> folium.Map:
             popup=folium.Popup(popup_text, max_width=200),
         ).add_to(m)
 
-    if activities:
-        all_coords = []
-        for act in activities:
-            coords = decode_polyline(act.get("map_polyline") or "")
-            all_coords.extend(coords)
-        if all_coords:
-            lats = [c[0] for c in all_coords]
-            lons = [c[1] for c in all_coords]
-            m.fit_bounds([[min(lats), min(lons)], [max(lats), max(lons)]])
+    if all_coords:
+        lats = [c[0] for c in all_coords]
+        lons = [c[1] for c in all_coords]
+        m.fit_bounds([[min(lats), min(lons)], [max(lats), max(lons)]])
 
     return m

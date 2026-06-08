@@ -1,6 +1,6 @@
 import streamlit as st
-from data.cache import get_activities, get_stream, get_computed, save_stream, save_computed, mark_detail_fetched, save_hr_zones, get_hr_zones
-from data.processor import power_zones, hr_zones, compute_activity_metrics
+from data.cache import get_activities, get_stream, get_computed, get_hr_zones
+from data.processor import power_zones, hr_zones, compute_activity_metrics, format_duration
 from components.charts import stream_line, elevation_area, zone_donut
 from components.maps import activity_map
 from streamlit_folium import st_folium
@@ -18,7 +18,11 @@ def render(athlete: dict, ftp: int, hr_threshold: int, client=None):
         cycling = activities  # fallback: show all if no cycling detected
 
     if not cycling:
-        st.info("No hay actividades cargadas. Usa el botón 'Sincronizar actividades' en la barra lateral.")
+        st.info(
+            "No hay actividades todavía.\n\n"
+            "Ejecuta en tu Mac:\n```\npython3 sync.py --streams\n```\n"
+            "(`--streams` descarga además las series de potencia/FC/cadencia para ver el detalle completo)."
+        )
         return
 
     options = {f"{a['start_date'][:10]} — {a['name']}": a["id"] for a in cycling}
@@ -45,7 +49,7 @@ def render(athlete: dict, ftp: int, hr_threshold: int, client=None):
     # KPI row
     c1, c2, c3, c4, c5, c6, c7 = st.columns(7)
     c1.metric("Distancia", f"{(act.get('distance_m') or 0)/1000:.1f} km")
-    c2.metric("Tiempo", f"{(act.get('moving_time_s') or 0)//60} min")
+    c2.metric("Tiempo", format_duration(act.get("moving_time_s")))
     c3.metric("Desnivel", f"{act.get('elevation_gain_m') or 0:.0f} m")
     avg_w = act.get("avg_watts")
     np_val = (cm or {}).get("np_watts")
@@ -101,78 +105,12 @@ def render(athlete: dict, ftp: int, hr_threshold: int, client=None):
 
 
 def _fetch_streams(activity_id, client, act: dict, ftp: int):
-    """Fetch detail data from Garmin for a single activity."""
+    """Fetch detail data from Garmin for a single activity (shared logic)."""
+    from data.stream_processor import fetch_and_store_activity_detail
     try:
-        from api.garmin_client import get_activity_details, get_activity_hr_zones
         with st.spinner("Cargando detalle de la actividad desde Garmin..."):
-            detail = get_activity_details(client, int(activity_id))
-
-            # Extract streams from Garmin's detail format
-            metrics = detail.get("connectIQMeasurements") or []
-            gps_data = detail.get("geoPolylineDTO") or {}
-
-            # Garmin detail has measuredIntervals / metricDescriptors
-            _extract_and_save_streams(activity_id, detail, ftp, act)
-
-            # HR zones from Garmin
-            hz = get_activity_hr_zones(client, int(activity_id))
-            if hz:
-                save_hr_zones(activity_id, hz)
-
-            mark_detail_fetched(activity_id)
+            found = fetch_and_store_activity_detail(client, activity_id, act, ftp)
+            if not found:
+                st.info("Esta actividad no tiene streams de potencia disponibles.")
     except Exception as e:
         st.warning(f"No se pudo cargar el detalle: {e}")
-
-
-def _extract_and_save_streams(activity_id, detail: dict, ftp: int, act: dict):
-    """
-    Parse Garmin's activity detail structure to extract time-series streams.
-    Garmin returns metrics via activityDetailMetrics / measuredIntervals.
-    """
-    # Try activityDetailMetrics structure
-    metrics_data = detail.get("activityDetailMetrics") or {}
-    descriptors = metrics_data.get("metricDescriptors") or []
-    intervals = metrics_data.get("activityDetailMetrics") or []
-
-    if not descriptors or not intervals:
-        # Alternative: gravelMetrics or other structures
-        return
-
-    key_map = {d["key"]: d["metricsIndex"] for d in descriptors if "key" in d and "metricsIndex" in d}
-
-    def extract(key):
-        idx = key_map.get(key)
-        if idx is None:
-            return None
-        vals = [row["metrics"][idx] if row.get("metrics") and idx < len(row["metrics"]) else None
-                for row in intervals]
-        return [v for v in vals if v is not None]
-
-    time_stream = extract("directTimestamp") or list(range(len(intervals)))
-    # Normalize time to seconds from start
-    if time_stream and isinstance(time_stream[0], (int, float)) and time_stream[0] > 1e9:
-        t0 = time_stream[0]
-        time_stream = [int(t - t0) / 1000 for t in time_stream]
-
-    watts = extract("directPower")
-    hr = extract("directHeartRate")
-    cad = extract("directBikeCadence") or extract("directCadence")
-    alt = extract("directAltitude") or extract("directElevation")
-    lat = extract("directLatitude")
-    lon = extract("directLongitude")
-
-    if time_stream:
-        save_stream(activity_id, "time", time_stream)
-    if watts:
-        save_stream(activity_id, "watts", watts)
-        cm = compute_activity_metrics(watts, act.get("moving_time_s", 0), ftp)
-        save_computed(activity_id, **cm)
-    if hr:
-        save_stream(activity_id, "heartrate", hr)
-    if cad:
-        save_stream(activity_id, "cadence", cad)
-    if alt:
-        save_stream(activity_id, "altitude", alt)
-    if lat and lon:
-        latlng = list(zip(lat, lon))
-        save_stream(activity_id, "latlng", latlng)

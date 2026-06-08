@@ -24,6 +24,21 @@ HR_ZONES = [
 ]
 
 
+def format_duration(seconds: Optional[int]) -> str:
+    """
+    Consistent human-readable duration formatting used across all pages
+    (e.g. Overview, Activity Detail, Routes): "45 min" or "1h 23min".
+    """
+    if not seconds:
+        return "—"
+    seconds = int(seconds)
+    h, rem = divmod(seconds, 3600)
+    m = rem // 60
+    if h > 0:
+        return f"{h}h {m:02d}min"
+    return f"{m} min"
+
+
 def normalized_power(watts_stream: list[float]) -> Optional[float]:
     if not watts_stream or len(watts_stream) < 30:
         return None
@@ -128,3 +143,114 @@ def ctl_atl(tss_by_date: dict) -> tuple[list, list, list]:
         [round(v, 1) for v in ctl.values],
         [round(v, 1) for v in atl.values],
     )
+
+
+# Standard durations (seconds) for power-curve analysis
+POWER_CURVE_DURATIONS = [5, 15, 60, 300, 600, 1200, 3600]
+POWER_CURVE_LABELS = {5: "5s", 15: "15s", 60: "1min", 300: "5min",
+                      600: "10min", 1200: "20min", 3600: "1h"}
+
+
+def best_power_for_duration(watts_stream: list[float], duration_s: int) -> Optional[float]:
+    """Best (max) rolling average power sustained for `duration_s` seconds."""
+    n = len(watts_stream)
+    if n < duration_s:
+        return None
+    window_sum = sum(watts_stream[:duration_s])
+    best = window_sum
+    for i in range(duration_s, n):
+        window_sum += watts_stream[i] - watts_stream[i - duration_s]
+        if window_sum > best:
+            best = window_sum
+    return round(best / duration_s, 1)
+
+
+def power_curve(streams_by_activity: dict[str, list[float]],
+                durations: list[int] = None) -> dict[int, float]:
+    """
+    Aggregate power curve across many activities.
+    `streams_by_activity`: {activity_id: watts_stream}
+    Returns {duration_s: best_power_ever_seen}.
+    """
+    durations = durations or POWER_CURVE_DURATIONS
+    best = {d: None for d in durations}
+    for watts in streams_by_activity.values():
+        if not watts:
+            continue
+        for d in durations:
+            p = best_power_for_duration(watts, d)
+            if p is not None and (best[d] is None or p > best[d]):
+                best[d] = p
+    return best
+
+
+def decoupling(watts_stream: list[float], hr_stream: list[float]) -> Optional[float]:
+    """
+    Pw:HR decoupling (%) — compares the power-to-heart-rate ratio between the
+    first and second half of an activity. Positive values indicate drift
+    (cardiac fatigue): your HR rises relative to power as the effort continues.
+    Formula: ((ratio_first_half - ratio_second_half) / ratio_first_half) * 100
+    """
+    n = min(len(watts_stream), len(hr_stream))
+    if n < 600:  # need at least ~10 minutes of overlapping data
+        return None
+
+    half = n // 2
+    w1, h1 = watts_stream[:half], hr_stream[:half]
+    w2, h2 = watts_stream[half:n], hr_stream[half:n]
+
+    avg_w1 = sum(w1) / len(w1)
+    avg_h1 = sum(h1) / len(h1)
+    avg_w2 = sum(w2) / len(w2)
+    avg_h2 = sum(h2) / len(h2)
+
+    if avg_h1 == 0 or avg_h2 == 0 or avg_w2 == 0:
+        return None
+
+    ratio1 = avg_w1 / avg_h1
+    ratio2 = avg_w2 / avg_h2
+    if ratio1 == 0:
+        return None
+
+    return round((ratio1 - ratio2) / ratio1 * 100, 1)
+
+
+def detect_intervals(watts_stream: list[float], ftp: float,
+                      threshold_pct: float = 0.88, min_duration_s: int = 90) -> list[dict]:
+    """
+    Detect sustained high-effort intervals within a ride.
+    An interval is a contiguous stretch where power stays above
+    `threshold_pct` * FTP for at least `min_duration_s` seconds.
+    Returns a list of {start_s, end_s, duration_s, avg_watts}.
+    """
+    if not watts_stream or not ftp:
+        return []
+
+    threshold = threshold_pct * ftp
+    intervals = []
+    start = None
+
+    for i, w in enumerate(watts_stream):
+        above = w >= threshold
+        if above and start is None:
+            start = i
+        elif not above and start is not None:
+            duration = i - start
+            if duration >= min_duration_s:
+                seg = watts_stream[start:i]
+                intervals.append({
+                    "start_s": start, "end_s": i, "duration_s": duration,
+                    "avg_watts": round(sum(seg) / len(seg), 1),
+                })
+            start = None
+
+    if start is not None:
+        duration = len(watts_stream) - start
+        if duration >= min_duration_s:
+            seg = watts_stream[start:]
+            intervals.append({
+                "start_s": start, "end_s": len(watts_stream), "duration_s": duration,
+                "avg_watts": round(sum(seg) / len(seg), 1),
+            })
+
+    return intervals

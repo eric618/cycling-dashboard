@@ -22,12 +22,18 @@ with st.sidebar:
 
     st.write(f"👤 **{athlete['fullname']}**")
 
+    # Persist FTP / HR threshold across page navigations via session_state
+    if "ftp" not in st.session_state:
+        st.session_state["ftp"] = DEFAULT_FTP
+    if "hr_threshold" not in st.session_state:
+        st.session_state["hr_threshold"] = DEFAULT_HR_THRESHOLD
+
     with st.expander("⚙️ Configuración"):
-        ftp = st.number_input("FTP (W)", value=DEFAULT_FTP,
-                              min_value=50, max_value=600, step=5)
+        ftp = st.number_input("FTP (W)", min_value=50, max_value=600, step=5,
+                              key="ftp")
         hr_threshold = st.number_input("FC umbral (lpm)",
-                                       value=DEFAULT_HR_THRESHOLD,
-                                       min_value=100, max_value=220, step=1)
+                                       min_value=100, max_value=220, step=1,
+                                       key="hr_threshold")
 
     st.divider()
 
@@ -45,7 +51,7 @@ with st.sidebar:
 
     page = st.radio(
         "Navegación",
-        ["Resumen", "Detalle de actividad", "Tendencias", "Rutas"],
+        ["Resumen", "Detalle de actividad", "Análisis", "Tendencias", "Rutas"],
         label_visibility="collapsed",
     )
 
@@ -57,6 +63,10 @@ if page == "Resumen":
 elif page == "Detalle de actividad":
     from pages.activity_detail import render
     render(athlete=athlete, ftp=ftp, hr_threshold=hr_threshold, client=None)
+
+elif page == "Análisis":
+    from pages.analysis import render
+    render(athlete=athlete, ftp=ftp, hr_threshold=hr_threshold)
 
 elif page == "Tendencias":
     from pages.trends import render
